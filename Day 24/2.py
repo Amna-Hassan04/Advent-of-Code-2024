@@ -1,116 +1,170 @@
-from collections import deque
-import sys
+import z3  # or import z4 as z3 if you're using z4
+import random
+from functools import cache
+from itertools import product, combinations
+from collections import defaultdict, deque
 
-# Define constants
-XOR = 'XOR'
-AND = 'AND'
-OR = 'OR'
+# Utility functions that were in util.py
+def lines(s: str):
+    return s.strip().split('\n')
 
-# Read input from a file
-input_file = "input.txt"  # Specify your input file name
-try:
-    with open(input_file, 'r') as file:
-        content = file.read()
-except FileNotFoundError:
-    print(f"Error: File '{input_file}' not found.")
-    sys.exit(1)
+def bfs(adj, start):
+    dist = {start: 0}
+    prev = {start: None}
+    q = deque([start])
 
-# Parse the file content
-g = {}
-rg = {}
+    while q:
+        u = q.popleft()
+        for v in adj[u]:
+            if v not in dist:
+                dist[v] = dist[u] + 1
+                prev[v] = u
+                q.append(v)
 
-# Helper function to determine min and max
-minmax = lambda _a, _b: (_a, _b) if _a <= _b else (_b, _a)
+    return dist, prev
 
-# Parse the input lines
-try:
-    lines = content.split('\n\n')
-    if len(lines) < 2:
-        raise ValueError("Invalid input format: Missing expected sections.")
-    for line in lines[1].splitlines():
-        parts = line.split()
-        if len(parts) != 5:
-            print(f"Skipping invalid line: {line}")
-            continue
-        a, op, b, _, c = parts
-        a, b = minmax(a, b)
-        g[a, b, op] = c
-        rg[c] = a, b, op
-except Exception as e:
-    print(f"Error parsing input: {e}")
-    sys.exit(1)
+def topsort(adj):
+    indeg = defaultdict(int)
+    for u in adj:
+        for v in adj[u]:
+            indeg[v] += 1
 
-# Define the swap function
-def swap(_a, _b):
-    if _a in rg and _b in rg:
-        rg[_a], rg[_b] = rg[_b], rg[_a]
-        g[rg[_a]], g[rg[_b]] = g[rg[_b]], g[rg[_a]]
-    else:
-        print(f"Error in swapping: {_a} or {_b} not found.")
+    q = deque()
+    for u in adj:
+        if indeg[u] == 0:
+            q.append(u)
 
-# Initialize variables
-output = set()
-c = ''
+    order = []
+    while q:
+        u = q.popleft()
+        order.append(u)
+        for v in adj[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                q.append(v)
 
-try:
-    max_index = max(
-        int(key[1:]) for key in rg.keys() if key[1:].isdigit()
-    )
-except ValueError:
-    print("Error: Unable to determine the maximum index in rg keys.")
-    sys.exit(1)
+    return order, len(order) != len(adj)
 
-# Main processing loop
-for i in range(max_index):
-    x = f'x{i:02}'
-    y = f'y{i:02}'
-    z = f'z{i:02}'
-    zn = f'z{i + 1:02}'
+# Read from input.txt
+with open("input.txt", "r") as f:
+    A, B = f.read().split("\n\n")
 
-    try:
-        xxy = g.get((x, y, XOR), None)
-        xay = g.get((x, y, AND), None)
+G = dict()
+for l in lines(A):
+    a, b = l.split(": ")
+    G[a] = int(b)
 
-        if xxy is None or xay is None:
-            print(f"Missing keys for ({x}, {y}): XOR or AND")
-            continue
+ops = {}
+for l in lines(B):
+    x, dest = l.split(" -> ")
+    a, op, b = x.split()
+    ops[dest] = (a, op, b)
 
-        if not c:
-            c = xay
-        else:
-            a, b = minmax(c, xxy)
-            k = a, b, XOR
+zs = {s for s in ops if s[0] == "z"}
+zs = sorted(zs, key=lambda x: int(x[1:]), reverse=True)
 
-            if k not in g:
-                if z not in rg:
-                    print(f"Error: {z} not found in rg.")
-                    continue
-                diff = list(set(rg[z][:2]) ^ set(k[:2]))
-                if len(diff) == 2:
-                    a, b = diff
-                    output.add(a)
-                    output.add(b)
-                    swap(a, b)
-                else:
-                    print(f"Error computing symmetric difference for {k} and {z}.")
-            elif g[k] != z:
-                output.add(g[k])
-                output.add(z)
-                swap(z, g[k])
-
-            if z in rg:
-                k = rg[z]
-
-            try:
-                c = g[minmax(c, xxy)[0], minmax(c, xxy)[1], AND]
-                c = g[minmax(c, xay)[0], minmax(c, xay)[1], OR]
-            except KeyError as e:
-                print(f"KeyError during computation: {e}")
+def sim(G):
+    n = len(zs)
+    i = 0
+    while i < n:
+        for d, (a, op, b) in ops.items():
+            if d in G:
                 continue
+            if a in G and b in G:
+                x, y = G[a], G[b]
+                if op == "AND":
+                    G[d] = x & y
+                elif op == "OR":
+                    G[d] = x | y
+                elif op == "XOR":
+                    G[d] = x ^ y
+                else:
+                    assert False
 
-    except KeyError as e:
-        print(f"KeyError: {e}")
-        continue
+                if d in zs:
+                    i += 1
 
-# Output the result
-print(','.join(sorted(output)))
+    return int("".join(str(G[z]) for z in zs), 2)
+
+def mkadj():
+    adj = {s: [a, b] for s, (a, _, b) in ops.items()}
+    for s in G:
+        adj[s] = []
+    return adj
+
+def is_cyclic():
+    return topsort(mkadj())[1]
+
+def swappable(s: str):
+    return set(bfs(mkadj(), s)[1]) - set(G)
+
+@cache
+def testf(i: int):
+    DIFF = 6
+    if i < DIFF:
+        tests = list(product(range(1 << i), repeat=2))
+    else:
+        tests = []
+        for _ in range(1 << (2*DIFF)):
+            a = random.randrange(1 << i)
+            b = random.randrange(1 << i)
+            tests.append((a, b))
+
+    random.shuffle(tests)
+    return tests
+
+def f(i: int, swapped: set[str]):
+    if i == 46:
+        res = ",".join(sorted(swapped))
+        print(f"Answer: {res}")
+        return
+
+    def getv(s: str, a: int, b: int) -> int:
+        if s[0] == "x":
+            return (a >> int(s[1:])) & 1
+        if s[0] == "y":
+            return (b >> int(s[1:])) & 1
+        av, op, bv = ops[s]
+        x, y = getv(av, a, b), getv(bv, a, b)
+        if op == "AND":
+            return x & y
+        if op == "OR":
+            return x | y
+        if op == "XOR":
+            return x ^ y
+
+    def check():
+        for a, b in testf(i):
+            for j in range(i+1):
+                x = getv(f"z{j:02}", a, b)
+                if x != ((a + b) >> j) & 1:
+                    return False
+        return True
+
+    works = check()
+    print(i, works, swapped)
+    if works:
+        f(i+1, swapped)
+        return
+
+    if len(swapped) == 8:
+        return
+
+    inside = swappable(f"z{i:02}") - swapped
+    outside = set(ops) - swapped
+    to_test = list(product(inside, outside)) + list(combinations(inside, 2))
+    random.shuffle(to_test)
+
+    for a, b in to_test:
+        if a == b: continue
+        ops[a], ops[b] = ops[b], ops[a]
+        swapped.add(a)
+        swapped.add(b)
+        if not is_cyclic() and check():
+            f(i, swapped)
+        swapped.remove(a)
+        swapped.remove(b)
+        ops[a], ops[b] = ops[b], ops[a]
+
+# Start the search
+f(0, set())
